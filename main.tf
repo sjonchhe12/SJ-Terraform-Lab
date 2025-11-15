@@ -10,52 +10,56 @@ terraform {
 }
 
 provider "aws" {
-  region = "us-east-1"
+  region = var.region
 }
 
 # VPC
 resource "aws_vpc" "main" {
-  cidr_block           = "10.0.0.0/16"
+  cidr_block           = var.vpc_cidr
   enable_dns_support   = true
   enable_dns_hostnames = true
-
-  tags = { Name = "mainvpc" }
+  tags = { Name = "main-vpc" }
 }
 
-# Public subnets
-resource "aws_subnet" "public_subnet1" {
+# Public Subnets
+resource "aws_subnet" "public1" {
   vpc_id                  = aws_vpc.main.id
-  cidr_block              = "10.0.1.0/24"
+  cidr_block              = var.public_subnet1_cidr
   availability_zone       = "us-east-1a"
   map_public_ip_on_launch = true
+  tags = { Name = "public-subnet-1" }
 }
 
-resource "aws_subnet" "public_subnet2" {
+resource "aws_subnet" "public2" {
   vpc_id                  = aws_vpc.main.id
-  cidr_block              = "10.0.3.0/24"
+  cidr_block              = var.public_subnet2_cidr
   availability_zone       = "us-east-1b"
   map_public_ip_on_launch = true
+  tags = { Name = "public-subnet-2" }
 }
 
-# Private subnets
-resource "aws_subnet" "private_subnet1" {
+# Private Subnets
+resource "aws_subnet" "private1" {
   vpc_id            = aws_vpc.main.id
-  cidr_block        = "10.0.2.0/24"
+  cidr_block        = var.private_subnet1_cidr
   availability_zone = "us-east-1a"
+  tags = { Name = "private-subnet-1" }
 }
 
-resource "aws_subnet" "private_subnet2" {
+resource "aws_subnet" "private2" {
   vpc_id            = aws_vpc.main.id
-  cidr_block        = "10.0.4.0/24"
+  cidr_block        = var.private_subnet2_cidr
   availability_zone = "us-east-1b"
+  tags = { Name = "private-subnet-2" }
 }
 
-
-# Internet Gateway & Route Table
+# Internet Gateway
 resource "aws_internet_gateway" "gw" {
   vpc_id = aws_vpc.main.id
+  tags   = { Name = "main-igw" }
 }
 
+# Public Route Table
 resource "aws_route_table" "public" {
   vpc_id = aws_vpc.main.id
 
@@ -63,23 +67,29 @@ resource "aws_route_table" "public" {
     cidr_block = "0.0.0.0/0"
     gateway_id = aws_internet_gateway.gw.id
   }
+
+  tags = { Name = "public-rt" }
 }
 
-resource "aws_route_table_association" "a_public_subnet1" {
-  subnet_id      = aws_subnet.public_subnet1.id
+# Associate public subnets with public route table
+resource "aws_route_table_association" "assoc_public1" {
+  subnet_id      = aws_subnet.public1.id
   route_table_id = aws_route_table.public.id
 }
 
-resource "aws_route_table_association" "a_public_subnet2" {
-  subnet_id      = aws_subnet.public_subnet2.id
+resource "aws_route_table_association" "assoc_public2" {
+  subnet_id      = aws_subnet.public2.id
   route_table_id = aws_route_table.public.id
 }
 
-# Web servers Security Group
+# Security Groups
 resource "aws_security_group" "web_sg" {
-  vpc_id = aws_vpc.main.id
+  name        = "web-sg"
+  description = "Allow HTTP traffic"
+  vpc_id      = aws_vpc.main.id
 
   ingress {
+    description = "HTTP from anywhere"
     from_port   = 80
     to_port     = 80
     protocol    = "tcp"
@@ -94,9 +104,10 @@ resource "aws_security_group" "web_sg" {
   }
 }
 
-# RDS Security Group
 resource "aws_security_group" "rds_sg" {
-  vpc_id = aws_vpc.main.id
+  name        = "rds-sg"
+  description = "Allow MySQL only from web servers"
+  vpc_id      = aws_vpc.main.id
 
   ingress {
     from_port       = 3306
@@ -113,78 +124,52 @@ resource "aws_security_group" "rds_sg" {
   }
 }
 
-# EC2 Instances
+# AMI Data Source
 data "aws_ami" "amazon_linux" {
   most_recent = true
   owners      = ["amazon"]
 
   filter {
     name   = "name"
-    values = ["al2023-ami*"]
-  }
-
-  filter {
-    name   = "architecture"
-    values = ["x86_64"]
-  }
-
-  filter {
-    name   = "virtualization-type"
-    values = ["hvm"]
+    values = ["amzn2-ami-hvm-*-x86_64-gp2"]
   }
 }
 
+# EC2 Instances
 resource "aws_instance" "web1" {
   ami                    = data.aws_ami.amazon_linux.id
-  instance_type          = "t2.micro"
-  subnet_id              = aws_subnet.public_subnet1.id
+  instance_type          = "t3.micro"
+  subnet_id              = aws_subnet.public1.id
   vpc_security_group_ids = [aws_security_group.web_sg.id]
 
-  tags = {
-    Name = var.instance1_name
-  }
+  tags = { Name = var.instance1_name }
 }
 
 resource "aws_instance" "web2" {
   ami                    = data.aws_ami.amazon_linux.id
-  instance_type          = "t2.micro"
-  subnet_id              = aws_subnet.public_subnet2.id
+  instance_type          = "t3.micro"
+  subnet_id              = aws_subnet.public2.id
   vpc_security_group_ids = [aws_security_group.web_sg.id]
 
-  tags = {
-    Name = var.instance2_name
-  }
+  tags = { Name = var.instance2_name }
 }
 
-# RDS MySQL Instance
+# RDS Subnet Group
 resource "aws_db_subnet_group" "rds_subnet_group" {
   name       = "rds-subnet-group"
-  subnet_ids = [aws_subnet.private_subnet1.id, aws_subnet.private_subnet2.id]
+  subnet_ids = [aws_subnet.private1.id, aws_subnet.private2.id]
 }
 
 resource "aws_db_instance" "mysql" {
   allocated_storage      = 20
   engine                 = "mysql"
   engine_version         = "8.0"
-  instance_class         = "db.t2.micro"
-  name                   = "Assign4DB"
-  username               = "admin"
-  password               = "YourStrongPassword123!"
+  instance_class         = "db.t3.micro" # or another allowed type
+  db_name                = "Assign4Terraform"
+  username               = "infrastructurecode"
+  password               = "terraform"
   db_subnet_group_name   = aws_db_subnet_group.rds_subnet_group.name
   vpc_security_group_ids = [aws_security_group.rds_sg.id]
   skip_final_snapshot    = true
   publicly_accessible    = false
-}
-
-# Outputs
-output "instance1_public_ip" {
-  value = aws_instance.web1.public_ip
-}
-
-output "instance2_public_ip" {
-  value = aws_instance.web2.public_ip
-}
-
-output "rds_endpoint" {
-  value = aws_db_instance.mysql.endpoint
 }
